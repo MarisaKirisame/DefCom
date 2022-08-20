@@ -1,19 +1,27 @@
 // Deriving a staged definitional interpreter
-package DefCom.Cal3;
+package DefCom.Cal4;
 
+import javax.tools.JavaCompiler;
+import javax.tools.ToolProvider;
+import java.io.File;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
 
 public class Cal {
   abstract static class Expr {
-    abstract int eval(Map<String, Integer> env);
-
-    abstract int yolo(Map<String, Integer> loc, int[] env);
-
-    abstract Function<int[], Integer> again(Map<String, Integer> loc);
+    abstract LExpr located(Map<String, Integer> loc);
 
     abstract void locate(Map<String, Integer> loc);
+  }
+
+  abstract static class LExpr {
+    abstract int eval(int[] env);
+
+    abstract String compile();
   }
 
   static class Lit extends Expr {
@@ -23,11 +31,15 @@ public class Cal {
 
     public String toString() {return String.valueOf(val);}
 
-    int eval(Map<String, Integer> env) {return val;}
+    LExpr located(Map<String, Integer> loc) {
+      return new LExpr() {
+        int eval(int[] env) {
+          return val;
+        }
 
-    int yolo(Map<String, Integer> loc, int[] env) {return val;}
-
-    Function<int[], Integer> again(Map<String, Integer> loc) {return env -> val;}
+        String compile() {return String.valueOf(val);}
+      };
+    }
 
     void locate(Map<String, Integer> loc) {}
   }
@@ -44,14 +56,18 @@ public class Cal {
 
     public String toString() {return "(" + left.toString() + "+" + right.toString() + ")";}
 
-    int eval(Map<String, Integer> env) {return left.eval(env) + right.eval(env);}
+    LExpr located(Map<String, Integer> loc) {
+      LExpr left = this.left.located(loc);
+      LExpr right = this.right.located(loc);
+      return new LExpr() {
+        int eval(int[] env) {
+          return left.eval(env) + right.eval(env);
+        }
 
-    int yolo(Map<String, Integer> loc, int[] env) {return left.yolo(loc, env) + right.yolo(loc, env);}
-
-    Function<int[], Integer> again(Map<String, Integer> loc) {
-      Function<int[], Integer> left = this.left.again(loc);
-      Function<int[], Integer> right = this.right.again(loc);
-      return env -> left.apply(env) + right.apply(env);
+        String compile() {
+          return "(" + left.compile() + "+" + right.compile() + ")";
+        }
+      };
     }
 
     void locate(Map<String, Integer> loc) {
@@ -72,14 +88,18 @@ public class Cal {
 
     public String toString() {return "(" + left.toString() + "*" + right.toString() + ")";}
 
-    int eval(Map<String, Integer> env) {return left.eval(env) * right.eval(env);}
+    LExpr located(Map<String, Integer> loc) {
+      LExpr left = this.left.located(loc);
+      LExpr right = this.right.located(loc);
+      return new LExpr() {
+        int eval(int[] env) {
+          return left.eval(env) * right.eval(env);
+        }
 
-    int yolo(Map<String, Integer> loc, int[] env) {return left.yolo(loc, env) * right.yolo(loc, env);}
-
-    Function<int[], Integer> again(Map<String, Integer> loc) {
-      Function<int[], Integer> left = this.left.again(loc);
-      Function<int[], Integer> right = this.right.again(loc);
-      return env -> left.apply(env) * right.apply(env);
+        String compile() {
+          return "(" + left.compile() + "*" + right.compile() + ")";
+        }
+      };
     }
 
     void locate(Map<String, Integer> loc) {
@@ -97,15 +117,15 @@ public class Cal {
 
     public String toString() {return name;}
 
-    int eval(Map<String, Integer> env) {return env.get(name);}
-    int yolo(Map<String, Integer> loc, int[] env) {
+    LExpr located(Map<String, Integer> loc) {
       int idx = loc.get(name);
-      return env[idx];
-    }
+      return new LExpr() {
+        int eval(int[] env) {
+          return env[idx];
+        }
 
-    Function<int[], Integer> again(Map<String, Integer> loc) {
-      int idx = loc.get(name);
-      return env -> env[idx];
+        String compile() {return "env[" + idx + "]";}
+      };
     }
 
     void locate(Map<String, Integer> loc) {
@@ -152,51 +172,66 @@ public class Cal {
     return arr;
   }
 
-  public static void profileEval(int n, int length) {
-    Expr example = getExample(n);
-    Map<String, Integer> env = getExampleEnv(n);
-    for (int i = 0; i < length; ++i) {
-      example.eval(env);
-    }
-  }
-
-  public static void profileYolo(int n, int length) {
+  public static void profileLocatedEval(int n, int length) {
     Expr example = getExample(n);
     Map<String, Integer> env = getExampleEnv(n);
     Map<String, Integer> loc = new HashMap<>();
     example.locate(loc);
+    LExpr located = example.located(loc);
     int[] locEnv = envToLocEnv(env, loc);
     for (int i = 0; i < length; ++i) {
-      example.yolo(loc, locEnv);
+      located.eval(locEnv);
     }
   }
 
-  public static void profileAgain(int n, int length) {
+  public static void profileLocatedCompile(int n, int length) throws Throwable {
     Expr example = getExample(n);
     Map<String, Integer> env = getExampleEnv(n);
     Map<String, Integer> loc = new HashMap<>();
     example.locate(loc);
-    Function<int[], Integer> located = example.again(loc);
+    LExpr located = example.located(loc);
+    Function<int[], Integer> compiled = javac(located.compile());
     int[] locEnv = envToLocEnv(env, loc);
     for (int i = 0; i < length; ++i) {
-      located.apply(locEnv);
+      compiled.apply(locEnv);
     }
+  }
+
+  static Function<int[], Integer> javac(String code) throws Throwable {
+    String source =
+      "package generated;\n" +
+      "import java.util.function.Function;\n" +
+      "public class Generated implements Function<int[], Integer> {\n" +
+      "  public Integer apply(int[] env) {\n" +
+      "    return " + code + ";\n" +
+      "  }\n" +
+      "}\n";
+
+    File root = Files.createTempDirectory("compile").toFile();
+    File sourceFile = new File(root, "generated/Generated.java");
+    sourceFile.getParentFile().mkdirs();
+    Files.writeString(sourceFile.toPath(), source);
+
+    JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+    compiler.run(null, null, null, sourceFile.getPath());
+
+    URLClassLoader classLoader = URLClassLoader.newInstance(new URL[] { root.toURI().toURL() });
+    Class<?> cls = Class.forName("generated.Generated", true, classLoader);
+    Object instance = cls.getDeclaredConstructor().newInstance();
+    return (Function<int[], Integer>) instance;
   }
 
   public static void main(String[] args) {
     try {
       int n = 4;
-      int length = 1024 * 1024 * 8;
+      int length = 1024 * 1024 * 128;
       long time0 = System.currentTimeMillis();
-      profileEval(n, length);
+      profileLocatedEval(n, length);
       long time1 = System.currentTimeMillis();
-      profileYolo(n, length);
+      profileLocatedCompile(n, length);
       long time2 = System.currentTimeMillis();
-      profileAgain(n, length);
-      long time3 = System.currentTimeMillis();
-      System.out.printf("Eval took %s%n", time1 - time0);
-      System.out.printf("Yolo took %s%n", time2 - time1);
-      System.out.printf("Again took %s%n", time3 - time2);
+      System.out.printf("LocatedEval took %s%n", time1 - time0);
+      System.out.printf("LocatedCompile took %s%n", time2 - time1);
     } catch (Throwable t) {
       t.printStackTrace();
     }
