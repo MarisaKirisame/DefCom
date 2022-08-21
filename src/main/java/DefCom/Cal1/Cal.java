@@ -1,5 +1,7 @@
-// Removing JSON and using Java Object instead, resulting in cleaner code
+// Using Java Object to represent program, resulting in cleaner code
 package DefCom.Cal1;
+
+import org.json.JSONObject;
 
 public class Cal {
 
@@ -53,6 +55,27 @@ public class Cal {
     return mkMult(mkPlus(mkLit(1), mkLit(2)), mkPlus(mkLit(3), mkLit(4)));
   }
 
+  static JSONObject getExampleJSON() {
+    return new JSONObject(
+            "{type: 'Multiply', " +
+                    "left: {type: 'Plus', " +
+                    "left: {type: 'Literal', value: 1}, " +
+                    "right: {type: 'Literal', value: 2}}, " +
+                    "right: {type: 'Plus', " +
+                    "left: {type: 'Literal', value: 3}, " +
+                    "right: {type: 'Literal', value: 4}}}");
+  }
+
+  static Expr JSONtoExpr(JSONObject j) {
+    String type = j.getString("type");
+    return switch (type) {
+      case "Literal" -> mkLit(j.getInt("value"));
+      case "Plus" -> mkPlus(JSONtoExpr(j.getJSONObject("left")), JSONtoExpr(j.getJSONObject("right")));
+      case "Multiply" -> mkMult(JSONtoExpr(j.getJSONObject("left")), JSONtoExpr(j.getJSONObject("right")));
+      default -> throw new RuntimeException("Unexpected value: " + type);
+    };
+  }
+
   static String pp(Expr expr) {
     if (expr instanceof Lit) {
       return String.valueOf(((Lit) expr).val);
@@ -84,6 +107,7 @@ public class Cal {
       System.out.println(eval(example));
       System.out.println(example);
       System.out.println(example.eval());
+      System.out.println(JSONtoExpr(getExampleJSON()));
     } catch (Throwable t) {
       t.printStackTrace();
     }
